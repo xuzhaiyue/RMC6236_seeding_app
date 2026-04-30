@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from io import StringIO
 
@@ -55,9 +56,6 @@ def calculate_plan(
     final_volume_ml_per_well: float,
     wells_per_timepoint: int,
     extra_fraction: float,
-    include_rmc6236: bool,
-    rmc6236_final_nm: float,
-    rmc6236_stock_mm: float,
 ) -> pd.DataFrame:
     result = density_table.copy()
     final_volume_ul = final_volume_ml_per_well * 1000
@@ -66,43 +64,68 @@ def calculate_plan(
     result["细胞悬液_uL_per_well"] = (
         result["cells_per_well"] / cell_concentration_per_ml * 1000
     )
-
-    if include_rmc6236 and rmc6236_stock_mm > 0:
-        stock_nm = rmc6236_stock_mm * 1_000_000
-        result["RMC6236_stock_uL_per_well"] = rmc6236_final_nm * final_volume_ul / stock_nm
-    else:
-        result["RMC6236_stock_uL_per_well"] = 0.0
-
-    result["补培养基_uL_per_well"] = (
-        final_volume_ul
-        - result["细胞悬液_uL_per_well"]
-        - result["RMC6236_stock_uL_per_well"]
-    )
+    result["补培养基_uL_per_well"] = final_volume_ul - result["细胞悬液_uL_per_well"]
     result["wells"] = wells_per_timepoint
     result["extra_percent"] = extra_fraction * 100
     result["总细胞数_with_extra"] = result["cells_per_well"] * multiplier
     result["总终体积_mL_with_extra"] = final_volume_ml_per_well * multiplier
     result["总细胞悬液_mL_with_extra"] = result["细胞悬液_uL_per_well"] * multiplier / 1000
     result["总培养基_mL_with_extra"] = result["补培养基_uL_per_well"] * multiplier / 1000
-    result["总RMC6236_stock_uL_with_extra"] = (
-        result["RMC6236_stock_uL_per_well"] * multiplier
-    )
 
     ordered_columns = [
         "时间点",
         "cells_per_well",
         "细胞悬液_uL_per_well",
         "补培养基_uL_per_well",
-        "RMC6236_stock_uL_per_well",
         "wells",
         "extra_percent",
         "总细胞数_with_extra",
         "总终体积_mL_with_extra",
         "总细胞悬液_mL_with_extra",
         "总培养基_mL_with_extra",
-        "总RMC6236_stock_uL_with_extra",
     ]
     return result[ordered_columns]
+
+
+def round_up_to_increment(value: float, increment: float) -> float:
+    return math.ceil(value / increment) * increment
+
+
+def calculate_drug_medium_plan(
+    stock_mm: float,
+    stock_input_ul: float,
+    intermediate_medium_ml: float,
+    target_nm: float,
+    drug_wells: int,
+    volume_ml_per_well: float,
+    loss_percent: float,
+    round_to_ml: float,
+) -> pd.DataFrame:
+    intermediate_total_ml = intermediate_medium_ml + stock_input_ul / 1000
+    intermediate_um = stock_mm * stock_input_ul / intermediate_total_ml
+    raw_total_ml = drug_wells * volume_ml_per_well * (1 + loss_percent / 100)
+    final_total_ml = round_up_to_increment(raw_total_ml, round_to_ml)
+    intermediate_needed_ul = target_nm * final_total_ml * 1000 / (intermediate_um * 1000)
+    medium_needed_ml = final_total_ml - intermediate_needed_ul / 1000
+
+    return pd.DataFrame(
+        [
+            {
+                "stock浓度_mM": stock_mm,
+                "第一步_stock原液_uL": stock_input_ul,
+                "第一步_培养基_mL": intermediate_medium_ml,
+                "得到中间液_uM": intermediate_um,
+                "目标终浓度_nM": target_nm,
+                "换液孔数": drug_wells,
+                "每孔换液_mL": volume_ml_per_well,
+                "损耗_percent": loss_percent,
+                "建议配制总量_mL": final_total_ml,
+                "第二步_加中间液_uL": intermediate_needed_ul,
+                "第二步_补培养基_mL": medium_needed_ml,
+                "中间液是否足够": "足够" if intermediate_needed_ul <= intermediate_total_ml * 1000 else "不够",
+            }
+        ]
+    )
 
 
 def recommend_reseed_container(remaining_cells: float) -> str:
@@ -186,7 +209,7 @@ st.set_page_config(
 )
 
 st.title("RMC-6236 细胞铺板计算器")
-st.caption("按计数后的 cells/mL 自动计算每孔细胞悬液、补培养基、总细胞量和可选 RMC-6236 加药体积。")
+st.caption("按计数后的 cells/mL 自动计算铺板、RMC-6236 含药培养基配置和 WB 后剩余细胞回种。")
 
 with st.sidebar:
     st.header("输入参数")
@@ -213,23 +236,6 @@ with st.sidebar:
     )
     extra_percent = st.slider("额外配液余量 (%)", min_value=0, max_value=50, value=15, step=1)
 
-    st.divider()
-    include_rmc6236 = st.checkbox("计算 RMC-6236 stock 加药体积", value=False)
-    rmc6236_final_nm = st.number_input(
-        "RMC-6236 终浓度 (nM)",
-        min_value=0.0,
-        value=100.0,
-        step=10.0,
-        disabled=not include_rmc6236,
-    )
-    rmc6236_stock_mm = st.number_input(
-        "RMC-6236 stock 浓度 (mM)",
-        min_value=0.001,
-        value=10.0,
-        step=1.0,
-        disabled=not include_rmc6236,
-    )
-
 st.subheader("1. 自定义每个时间点 cells/well")
 edited_density = st.data_editor(
     build_default_table(preset),
@@ -252,33 +258,24 @@ plan = calculate_plan(
     final_volume_ml_per_well=final_volume_ml,
     wells_per_timepoint=int(wells_per_timepoint),
     extra_fraction=extra_percent / 100,
-    include_rmc6236=include_rmc6236,
-    rmc6236_final_nm=rmc6236_final_nm,
-    rmc6236_stock_mm=rmc6236_stock_mm,
 )
 
 negative_medium = plan["补培养基_uL_per_well"] < 0
-tiny_drug_volume = include_rmc6236 and (plan["RMC6236_stock_uL_per_well"] < 0.5).any()
 
 if negative_medium.any():
     bad_timepoints = ", ".join(plan.loc[negative_medium, "时间点"].tolist())
     st.error(
-        f"{bad_timepoints} 的细胞悬液/药物体积已经超过终体积。请降低 cells/well、提高细胞浓度或增加终体积。"
+        f"{bad_timepoints} 的细胞悬液体积已经超过终体积。请降低 cells/well、提高细胞浓度或增加终体积。"
     )
-
-if tiny_drug_volume:
-    st.warning("单孔 RMC-6236 stock 体积低于 0.5 µL，建议先配中间工作液或 master mix 后再加药。")
 
 st.subheader("2. 输出计算表")
 display_plan = plan.copy()
 rounding_columns = [
     "细胞悬液_uL_per_well",
     "补培养基_uL_per_well",
-    "RMC6236_stock_uL_per_well",
     "总终体积_mL_with_extra",
     "总细胞悬液_mL_with_extra",
     "总培养基_mL_with_extra",
-    "总RMC6236_stock_uL_with_extra",
 ]
 display_plan[rounding_columns] = display_plan[rounding_columns].round(3)
 display_plan["总细胞数_with_extra"] = display_plan["总细胞数_with_extra"].round(0).astype(int)
@@ -303,9 +300,6 @@ settings = {
     "final_volume_ml_per_well": final_volume_ml,
     "wells_per_timepoint": int(wells_per_timepoint),
     "extra_percent": extra_percent,
-    "include_rmc6236": include_rmc6236,
-    "rmc6236_final_nm": rmc6236_final_nm if include_rmc6236 else "NA",
-    "rmc6236_stock_mm": rmc6236_stock_mm if include_rmc6236 else "NA",
 }
 
 csv_name = f"{datetime.now().strftime('%Y-%m-%d')}_RMC6236_seeding_plan.csv"
@@ -317,7 +311,139 @@ st.download_button(
 )
 
 st.divider()
-st.subheader("3. WB 后剩余细胞回种保种")
+st.subheader("3. RMC-6236 含药培养基配置")
+
+drug_cols_top = st.columns(4)
+with drug_cols_top[0]:
+    drug_stock_mm = st.number_input(
+        "RMC-6236 stock (mM)",
+        min_value=0.001,
+        value=10.0,
+        step=1.0,
+    )
+with drug_cols_top[1]:
+    drug_target_nm = st.number_input(
+        "目标终浓度 (nM)",
+        min_value=0.0,
+        value=100.0,
+        step=10.0,
+    )
+with drug_cols_top[2]:
+    drug_wells = st.number_input(
+        "要换液的孔数",
+        min_value=1,
+        value=6,
+        step=1,
+    )
+with drug_cols_top[3]:
+    drug_loss_percent = st.slider("加药配液损耗 (%)", min_value=0, max_value=50, value=15, step=5)
+
+drug_cols_bottom = st.columns(4)
+with drug_cols_bottom[0]:
+    stock_input_ul = st.number_input(
+        "第一步 stock 原液 (µL)",
+        min_value=2.0,
+        value=2.0,
+        step=0.5,
+    )
+with drug_cols_bottom[1]:
+    intermediate_medium_ml = st.number_input(
+        "第一步培养基 (mL)",
+        min_value=0.1,
+        value=2.0,
+        step=0.1,
+    )
+with drug_cols_bottom[2]:
+    drug_volume_ml_per_well = st.number_input(
+        "每孔换液体积 (mL)",
+        min_value=0.05,
+        value=final_volume_ml,
+        step=0.1,
+    )
+with drug_cols_bottom[3]:
+    round_to_ml = st.number_input(
+        "总量向上取整到 (mL)",
+        min_value=0.1,
+        value=1.0,
+        step=0.5,
+    )
+
+drug_plan = calculate_drug_medium_plan(
+    stock_mm=drug_stock_mm,
+    stock_input_ul=stock_input_ul,
+    intermediate_medium_ml=intermediate_medium_ml,
+    target_nm=drug_target_nm,
+    drug_wells=int(drug_wells),
+    volume_ml_per_well=drug_volume_ml_per_well,
+    loss_percent=drug_loss_percent,
+    round_to_ml=round_to_ml,
+)
+
+display_drug_plan = drug_plan.copy()
+display_drug_plan[
+    [
+        "stock浓度_mM",
+        "第一步_stock原液_uL",
+        "第一步_培养基_mL",
+        "得到中间液_uM",
+        "目标终浓度_nM",
+        "每孔换液_mL",
+        "损耗_percent",
+        "建议配制总量_mL",
+        "第二步_加中间液_uL",
+        "第二步_补培养基_mL",
+    ]
+] = display_drug_plan[
+    [
+        "stock浓度_mM",
+        "第一步_stock原液_uL",
+        "第一步_培养基_mL",
+        "得到中间液_uM",
+        "目标终浓度_nM",
+        "每孔换液_mL",
+        "损耗_percent",
+        "建议配制总量_mL",
+        "第二步_加中间液_uL",
+        "第二步_补培养基_mL",
+    ]
+].round(3)
+
+st.dataframe(display_drug_plan, use_container_width=True, hide_index=True)
+
+drug_summary = display_drug_plan.iloc[0]
+if drug_summary["中间液是否足够"] == "不够":
+    st.error("第一步配出的 uM 中间液不够。请增加第一步 stock 原液和培养基体积。")
+else:
+    st.success(
+        f"操作：先用 {drug_summary['第一步_stock原液_uL']:.1f} µL stock + "
+        f"{drug_summary['第一步_培养基_mL']:.1f} mL 培养基配成 "
+        f"{drug_summary['得到中间液_uM']:.3g} µM 中间液；再取 "
+        f"{drug_summary['第二步_加中间液_uL']:.1f} µL 中间液，加培养基到 "
+        f"{drug_summary['建议配制总量_mL']:.1f} mL。"
+    )
+
+drug_settings = {
+    **settings,
+    "drug_stock_mm": drug_stock_mm,
+    "drug_target_nm": drug_target_nm,
+    "drug_wells": int(drug_wells),
+    "drug_loss_percent": drug_loss_percent,
+    "drug_stock_input_ul": stock_input_ul,
+    "drug_intermediate_medium_ml": intermediate_medium_ml,
+    "drug_volume_ml_per_well": drug_volume_ml_per_well,
+    "drug_round_to_ml": round_to_ml,
+}
+
+drug_csv_name = f"{datetime.now().strftime('%Y-%m-%d')}_RMC6236_drug_medium_plan.csv"
+st.download_button(
+    "下载加药配置 CSV",
+    data=to_csv_bytes(display_drug_plan, drug_settings),
+    file_name=drug_csv_name,
+    mime="text/csv",
+)
+
+st.divider()
+st.subheader("4. WB 后剩余细胞回种保种")
 
 reseed_cols = st.columns([1.1, 1.0, 1.0, 1.0])
 with reseed_cols[0]:
@@ -391,7 +517,7 @@ if (display_reseeding_plan["补培养基_mL_per_flask"] < 0).any():
 st.dataframe(display_reseeding_plan, use_container_width=True, hide_index=True)
 
 reseeding_settings = {
-    **settings,
+    **drug_settings,
     "reseeding_remaining_cells": int(remaining_cells),
     "reseeding_goal": reseeding_goal,
     "reseeding_flask_count": int(reseeding_flask_count),
