@@ -15,6 +15,30 @@ DEFAULT_DENSITIES = {
     "慢生/分化型": [650_000, 650_000, 650_000, 550_000, 500_000, 220_000, 75_000, 25_000],
 }
 
+RESEEDING_GOALS = ["2 天左右长满", "3 天左右长满", "4–5 天左右长满"]
+
+RESEEDING_DEFAULTS = {
+    "快生型": {
+        "2 天左右长满": {"T25": (400_000, 600_000), "T75": (1_200_000, 1_800_000)},
+        "3 天左右长满": {"T25": (200_000, 300_000), "T75": (600_000, 900_000)},
+        "4–5 天左右长满": {"T25": (100_000, 150_000), "T75": (300_000, 500_000)},
+    },
+    "中快/中速型": {
+        "2 天左右长满": {"T25": (600_000, 800_000), "T75": (1_800_000, 2_400_000)},
+        "3 天左右长满": {"T25": (300_000, 500_000), "T75": (900_000, 1_500_000)},
+        "4–5 天左右长满": {"T25": (150_000, 250_000), "T75": (500_000, 800_000)},
+    },
+    "慢生/分化型": {
+        "2 天左右长满": {"T25": (800_000, 1_000_000), "T75": (2_400_000, 3_000_000)},
+        "3 天左右长满": {"T25": (500_000, 700_000), "T75": (1_500_000, 2_100_000)},
+        "4–5 天左右长满": {"T25": (250_000, 400_000), "T75": (800_000, 1_200_000)},
+    },
+}
+
+GOAL_DAYS = {"2 天左右长满": 2.0, "3 天左右长满": 3.0, "4–5 天左右长满": 4.5}
+DEFAULT_DOUBLING_TIME_HOURS = {"快生型": 24.0, "中快/中速型": 30.0, "慢生/分化型": 40.0}
+FULL_FLASK_CELLS = {"T25": 2_400_000, "T75": 7_200_000}
+
 
 def build_default_table(preset: str) -> pd.DataFrame:
     return pd.DataFrame(
@@ -79,6 +103,70 @@ def calculate_plan(
         "总RMC6236_stock_uL_with_extra",
     ]
     return result[ordered_columns]
+
+
+def recommend_reseed_container(remaining_cells: float) -> str:
+    if remaining_cells < 200_000:
+        return "建议 T25 低密度保种；不建议种 T75。"
+    if remaining_cells < 800_000:
+        return "建议 T25。"
+    if remaining_cells < 2_000_000:
+        return "建议 T75，或拆成 2 个 T25。"
+    return "建议 T75；如果细胞很多，可以同时冻存一管。"
+
+
+def calculate_reseeding_plan(
+    growth_preset: str,
+    target_goal: str,
+    cell_concentration_per_ml: float,
+    remaining_cells: float,
+    flask_count: int,
+    use_doubling_time: bool,
+    doubling_time_hours: float,
+) -> pd.DataFrame:
+    rows = []
+    culture_days = GOAL_DAYS[target_goal]
+
+    for flask_type in ["T25", "T75"]:
+        low, high = RESEEDING_DEFAULTS[growth_preset][target_goal][flask_type]
+        experience_midpoint = (low + high) / 2
+        if use_doubling_time and doubling_time_hours > 0:
+            recommended_cells = FULL_FLASK_CELLS[flask_type] / (
+                2 ** (culture_days * 24 / doubling_time_hours)
+            )
+        else:
+            recommended_cells = experience_midpoint
+
+        medium_ml = 15.0 if flask_type == "T75" and target_goal == "4–5 天左右长满" else 12.0
+        if flask_type == "T25":
+            medium_ml = 5.0
+
+        cell_suspension_ul = recommended_cells / cell_concentration_per_ml * 1000
+        medium_to_add_ml = medium_ml - cell_suspension_ul / 1000
+        total_needed_cells = recommended_cells * flask_count
+        max_flasks = int(remaining_cells // recommended_cells) if recommended_cells > 0 else 0
+
+        rows.append(
+            {
+                "瓶型": flask_type,
+                "目标长满时间": target_goal,
+                "经验下限_cells_per_flask": low,
+                "经验上限_cells_per_flask": high,
+                "推荐_cells_per_flask": recommended_cells,
+                "培养基终体积_mL_per_flask": medium_ml,
+                "细胞悬液_uL_per_flask": cell_suspension_ul,
+                "补培养基_mL_per_flask": medium_to_add_ml,
+                "计划瓶数": flask_count,
+                "需要总细胞数": total_needed_cells,
+                "需要总细胞悬液_mL": cell_suspension_ul * flask_count / 1000,
+                "剩余细胞数": remaining_cells,
+                "剩余_minus_需要": remaining_cells - total_needed_cells,
+                "按剩余细胞最多可种瓶数": max_flasks,
+                "是否足够": "足够" if remaining_cells >= total_needed_cells else "不够",
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 def to_csv_bytes(result: pd.DataFrame, settings: dict[str, object]) -> bytes:
@@ -228,5 +316,96 @@ st.download_button(
     mime="text/csv",
 )
 
+st.divider()
+st.subheader("3. WB 后剩余细胞回种保种")
+
+reseed_cols = st.columns([1.1, 1.0, 1.0, 1.0])
+with reseed_cols[0]:
+    remaining_cells = st.number_input(
+        "WB 铺板后剩余细胞数",
+        min_value=0.0,
+        value=500_000.0,
+        step=50_000.0,
+        format="%.0f",
+    )
+with reseed_cols[1]:
+    reseeding_goal = st.selectbox("希望几天左右长满", RESEEDING_GOALS, index=1)
+with reseed_cols[2]:
+    reseeding_flask_count = st.number_input(
+        "计划瓶数",
+        min_value=1,
+        value=1,
+        step=1,
+    )
+with reseed_cols[3]:
+    use_doubling_time = st.checkbox("用 doubling time 估算", value=False)
+
+if use_doubling_time:
+    doubling_time_hours = st.number_input(
+        "Doubling time (小时)",
+        min_value=1.0,
+        value=DEFAULT_DOUBLING_TIME_HOURS[preset],
+        step=1.0,
+        format="%.1f",
+    )
+else:
+    doubling_time_hours = DEFAULT_DOUBLING_TIME_HOURS[preset]
+
+reseeding_plan = calculate_reseeding_plan(
+    growth_preset=preset,
+    target_goal=reseeding_goal,
+    cell_concentration_per_ml=cell_concentration,
+    remaining_cells=remaining_cells,
+    flask_count=int(reseeding_flask_count),
+    use_doubling_time=use_doubling_time,
+    doubling_time_hours=doubling_time_hours,
+)
+
+st.info(recommend_reseed_container(remaining_cells))
+
+display_reseeding_plan = reseeding_plan.copy()
+reseed_integer_columns = [
+    "经验下限_cells_per_flask",
+    "经验上限_cells_per_flask",
+    "推荐_cells_per_flask",
+    "需要总细胞数",
+    "剩余细胞数",
+    "剩余_minus_需要",
+]
+display_reseeding_plan[reseed_integer_columns] = (
+    display_reseeding_plan[reseed_integer_columns].round(0).astype(int)
+)
+reseed_float_columns = [
+    "培养基终体积_mL_per_flask",
+    "细胞悬液_uL_per_flask",
+    "补培养基_mL_per_flask",
+    "需要总细胞悬液_mL",
+]
+display_reseeding_plan[reseed_float_columns] = display_reseeding_plan[
+    reseed_float_columns
+].round(3)
+
+if (display_reseeding_plan["补培养基_mL_per_flask"] < 0).any():
+    st.error("回种计算中细胞悬液体积超过瓶内终体积。请提高细胞浓度、降低回种细胞数或增加终体积。")
+
+st.dataframe(display_reseeding_plan, use_container_width=True, hide_index=True)
+
+reseeding_settings = {
+    **settings,
+    "reseeding_remaining_cells": int(remaining_cells),
+    "reseeding_goal": reseeding_goal,
+    "reseeding_flask_count": int(reseeding_flask_count),
+    "reseeding_use_doubling_time": use_doubling_time,
+    "reseeding_doubling_time_hours": doubling_time_hours if use_doubling_time else "NA",
+}
+
+reseeding_csv_name = f"{datetime.now().strftime('%Y-%m-%d')}_RMC6236_reseeding_plan.csv"
+st.download_button(
+    "下载回种 CSV",
+    data=to_csv_bytes(display_reseeding_plan, reseeding_settings),
+    file_name=reseeding_csv_name,
+    mime="text/csv",
+)
+
 with st.expander("本次计算参数"):
-    st.json(settings)
+    st.json(reseeding_settings)
