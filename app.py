@@ -150,21 +150,10 @@ def calculate_drug_medium_plan(
     )
 
 
-def recommend_reseed_container(remaining_cells: float) -> str:
-    if remaining_cells < 200_000:
-        return "建议 T25 低密度保种；不建议种 T75。"
-    if remaining_cells < 800_000:
-        return "建议 T25。"
-    if remaining_cells < 2_000_000:
-        return "建议 T75，或拆成 2 个 T25。"
-    return "建议 T75；如果细胞很多，可以同时冻存一管。"
-
-
 def calculate_reseeding_plan(
     growth_preset: str,
     target_goal: str,
     cell_concentration_per_ml: float,
-    remaining_cells: float,
     flask_count: int,
     use_doubling_time: bool,
     doubling_time_hours: float,
@@ -189,7 +178,6 @@ def calculate_reseeding_plan(
         cell_suspension_ul = recommended_cells / cell_concentration_per_ml * 1000
         medium_to_add_ml = medium_ml - cell_suspension_ul / 1000
         total_needed_cells = recommended_cells * flask_count
-        max_flasks = int(remaining_cells // recommended_cells) if recommended_cells > 0 else 0
 
         rows.append(
             {
@@ -204,10 +192,6 @@ def calculate_reseeding_plan(
                 "计划瓶数": flask_count,
                 "需要总细胞数": total_needed_cells,
                 "需要总细胞悬液_mL": cell_suspension_ul * flask_count / 1000,
-                "剩余细胞数": remaining_cells,
-                "剩余_minus_需要": remaining_cells - total_needed_cells,
-                "按剩余细胞最多可种瓶数": max_flasks,
-                "是否足够": "足够" if remaining_cells >= total_needed_cells else "不够",
             }
         )
 
@@ -231,7 +215,7 @@ st.set_page_config(
 )
 
 st.title("RMC-6236 细胞铺板计算器")
-st.caption("按计数后的 cells/mL 自动计算铺板、RMC-6236 含药培养基配置和 WB 后剩余细胞回种。")
+st.caption("按计数后的万 cells/mL 自动计算铺板、RMC-6236 含药培养基配置和 WB 后回种推荐。")
 
 with st.sidebar:
     st.header("输入参数")
@@ -496,28 +480,19 @@ st.download_button(
 )
 
 st.divider()
-st.subheader("4. WB 后剩余细胞回种保种")
+st.subheader("4. WB 后细胞回种推荐")
 
-reseed_cols = st.columns([1.1, 1.0, 1.0, 1.0])
+reseed_cols = st.columns(3)
 with reseed_cols[0]:
-    remaining_cells_wan = st.number_input(
-        "WB 铺板后剩余细胞数 (万)",
-        min_value=0.0,
-        value=50.0,
-        step=5.0,
-        format="%.2f",
-    )
-    remaining_cells = remaining_cells_wan * WAN
-with reseed_cols[1]:
     reseeding_goal = st.selectbox("希望几天左右长满", RESEEDING_GOALS, index=1)
-with reseed_cols[2]:
+with reseed_cols[1]:
     reseeding_flask_count = st.number_input(
         "计划瓶数",
         min_value=1,
         value=1,
         step=1,
     )
-with reseed_cols[3]:
+with reseed_cols[2]:
     use_doubling_time = st.checkbox("用 doubling time 估算", value=False)
 
 if use_doubling_time:
@@ -535,13 +510,10 @@ reseeding_plan = calculate_reseeding_plan(
     growth_preset=preset,
     target_goal=reseeding_goal,
     cell_concentration_per_ml=cell_concentration,
-    remaining_cells=remaining_cells,
     flask_count=int(reseeding_flask_count),
     use_doubling_time=use_doubling_time,
     doubling_time_hours=doubling_time_hours,
 )
-
-st.info(recommend_reseed_container(remaining_cells))
 
 display_reseeding_plan = reseeding_plan.copy()
 display_reseeding_plan = add_wan_columns(
@@ -551,8 +523,6 @@ display_reseeding_plan = add_wan_columns(
         "经验上限_cells_per_flask",
         "推荐_cells_per_flask",
         "需要总细胞数",
-        "剩余细胞数",
-        "剩余_minus_需要",
     ],
     drop_original=True,
 )
@@ -562,8 +532,6 @@ display_reseeding_plan = display_reseeding_plan.rename(
         "经验上限_cells_per_flask_万": "经验上限_万cells_per_flask",
         "推荐_cells_per_flask_万": "推荐_万cells_per_flask",
         "需要总细胞数_万": "需要总细胞数_万",
-        "剩余细胞数_万": "剩余细胞数_万",
-        "剩余_minus_需要_万": "剩余_minus_需要_万",
     }
 )
 reseed_wan_columns = [
@@ -571,8 +539,6 @@ reseed_wan_columns = [
     "经验上限_万cells_per_flask",
     "推荐_万cells_per_flask",
     "需要总细胞数_万",
-    "剩余细胞数_万",
-    "剩余_minus_需要_万",
 ]
 display_reseeding_plan[reseed_wan_columns] = display_reseeding_plan[reseed_wan_columns].round(3)
 reseed_float_columns = [
@@ -597,10 +563,6 @@ display_reseeding_plan = display_reseeding_plan[
         "计划瓶数",
         "需要总细胞数_万",
         "需要总细胞悬液_mL",
-        "剩余细胞数_万",
-        "剩余_minus_需要_万",
-        "按剩余细胞最多可种瓶数",
-        "是否足够",
     ]
 ]
 
@@ -611,8 +573,6 @@ st.dataframe(display_reseeding_plan, use_container_width=True, hide_index=True)
 
 reseeding_settings = {
     **drug_settings,
-    "reseeding_remaining_cells": int(remaining_cells),
-    "reseeding_remaining_cells_万": remaining_cells_wan,
     "reseeding_goal": reseeding_goal,
     "reseeding_flask_count": int(reseeding_flask_count),
     "reseeding_use_doubling_time": use_doubling_time,
