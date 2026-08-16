@@ -6,9 +6,12 @@ on:
       - "histPharm/**"
       - ".github/workflows/histPharm-R-CMD-check.yaml"
   push:
-    branches: [main]
+    branches:
+      - main
+      - "agent/**"
     paths:
       - "histPharm/**"
+      - ".github/workflows/histPharm-R-CMD-check.yaml"
   workflow_dispatch:
 
 jobs:
