@@ -1,15 +1,18 @@
 Package: histPharm
 Type: Package
 Title: History-Conditioned Pharmacology for Sequential Drug Experiments
-Version: 0.1.0
-Authors@R: person("Zhaiyue", role = c("aut", "cre"), email = "xzy1234560809@163.com")
+Version: 0.1.1
+Authors@R: person(given = "Zhaiyue", family = "Xu", role = c("aut", "cre"), email = "xzy1234560809@163.com")
+Author: Zhaiyue Xu [aut, cre]
+Maintainer: Zhaiyue Xu <xzy1234560809@163.com>
 Description: Tools for reciprocal, sequence-resolved drug-response experiments.
     histPharm estimates treatment-history-conditioned incremental drug effects,
     reciprocal sequence asymmetry, absolute residual-burden differences,
     effect-space coordinates, uncertainty by biological-replicate bootstrap,
     post-washout durable fate, and state-versus-clock predictive performance.
-    The package is designed for experimentally matched sequential pharmacology
-    rather than as a replacement for simultaneous-combination reference models.
+    The package enforces explicit lower-limit-of-quantification handling,
+    complete matched reciprocal grids, biological-replicate inference, and
+    timing/plate metadata for experimentally matched sequential pharmacology.
 License: MIT + file LICENSE
 Encoding: UTF-8
 RoxygenNote: 7.3.2
