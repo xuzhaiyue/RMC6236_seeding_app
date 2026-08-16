@@ -1,0 +1,9 @@
+model,replicate,sequence,dose_A,dose_B,readout
+PDC_demo,1,A_to_B,0,0,1.00
+PDC_demo,1,A_to_B,1,0,0.70
+PDC_demo,1,A_to_B,0,1,0.80
+PDC_demo,1,A_to_B,1,1,0.40
+PDC_demo,1,B_to_A,0,0,1.00
+PDC_demo,1,B_to_A,1,0,0.75
+PDC_demo,1,B_to_A,0,1,0.85
+PDC_demo,1,B_to_A,1,1,0.55
