@@ -8,7 +8,7 @@ It is designed around a question that static combination scores do not directly 
 
 ## Core estimands
 
-For a matched `A_to_B` experiment at doses `a` and `b`, histPharm defines the history-conditioned interaction
+For a matched `A_to_B` experiment at doses `a` and `b`, histPharm defines
 
 `H_AtoB = log[(V_a0 * V_0b) / (V_ab * V_00)]`.
 
@@ -18,57 +18,75 @@ This is equivalently the second-drug effect after A history minus the time-match
 
 quantifies directional history asymmetry.
 
-histPharm intentionally keeps this separate from the absolute sequence contrast
+histPharm intentionally keeps this separate from the cross-sequence burden contrast
 
 `A_abs = log(V_BtoA / V_AtoB)`,
 
 because a stronger history interaction does not necessarily imply a lower final residual burden.
 
-## What is implemented in v0.1.0
+## v0.1.1 expert-review remediation
 
-- validation of reciprocal 2D sequence data;
-- technical-replicate collapse and explicit normalization choices;
-- `H_AtoB`, `H_BtoA`, and reciprocal `DeltaH`;
-- absolute residual-burden sequence contrast;
-- nominal-dose to single-agent effect-space transformation;
-- biological-replicate bootstrap confidence intervals and sign probabilities;
-- synthetic benchmark generator with known interaction truth;
-- automated no-history, symmetric, and directional simulation benchmark scenarios;
-- joint interaction-versus-efficacy sequence-regime classification;
-- leave-one-model-out comparison of state, clock, dose, and state+clock predictors;
-- post-washout regrowth / durable-fate metrics;
-- heatmap-style base-R visualizations;
-- export of fixed-first sequential curves to the column schema used by the published d-chain example dataset.
+v0.1.1 hardens the calibration pipeline after methodological review:
 
-## Input schema
+- **No arbitrary tiny-value flooring.** Values at/below an explicit LLOQ are masked/censored; exact `H` is not reported when a required component is censored.
+- **Strict reciprocal-grid validation.** Missing positive-positive coordinates, missing margins, unmatched reciprocal dose grids, or incomplete reciprocal schedules fail validation.
+- **Technical versus biological replication is enforced.** Raw technical replicates require explicit technical identifiers; collapsed biological conditions must be unique.
+- **Timing metadata is enforced.** Publication-grade validation requires `phase1_start`, `phase1_end`, `phase2_start`, `phase2_end`, and `endpoint_time`, with reciprocal schedules time matched.
+- **Plate metadata is enforced.** Raw reciprocal blocks require plate identifiers; cross-sequence burden comparisons require explicit `calibration_group` metadata.
+- **Small-n bootstrap is labelled exploratory.** The package does not reinterpret bootstrap sign frequency as a p-value or posterior probability.
+- **Durable-fate terminology is restricted.** Per-hour change is reported as `log_response_change_per_hour`; it is a growth rate only when the assay is validated as proportional to cell number.
+- **Missing surface coordinates remain missing.** Plotting no longer silently renders absent grid cells as zero.
 
-A minimal long-form data frame contains:
+## Publication-grade input schema
+
+The recommended long-form input contains:
 
 ```text
-model  replicate  sequence  dose_A  dose_B  readout
+model
+replicate
+sequence
+dose_A
+dose_B
+technical
+plate
+calibration_group
+phase1_start
+phase1_end
+phase2_start
+phase2_end
+endpoint_time
+endpoint
+readout
 ```
 
-where `sequence` is exactly `A_to_B` or `B_to_A`. Each biological replicate and sequence must contain the matched `(0,0)` vehicle, both single-drug margins, and the combination points to be estimated.
+where `sequence` is exactly `A_to_B` or `B_to_A`.
 
-Technical replicates can be kept as individual rows and collapsed explicitly with `collapse_technical_replicates()`.
+Each biological replicate and sequence must contain the complete matched dose grid, including `(0,0)`, A-only margins, B-only margins, and all positive-positive coordinates. Reciprocal sequences must use the same dose grid and phase timing.
 
-## Minimal example
+## Safe calibration workflow
 
 ```r
 library(histPharm)
 
 x <- simulate_sequence_data(
-  dose_A = c(0, 0.25, 0.5, 1, 2),
-  dose_B = c(0, 0.25, 0.5, 1, 2),
-  n_models = 3,
+  dose_A = c(0, 2.5, 5, 10, 15, 25, 50, 100),
+  dose_B = c(0, 1, 2.5, 5, 10, 15, 30, 60),
+  model_names = c("HPAC", "SU.86.86"),
   n_replicates = 3,
-  h_A_to_B = 0.55,
+  n_technical = 2,
+  h_A_to_B = 0.45,
   h_B_to_A = 0.10,
-  seed = 1
+  seed = 8686
 )
 
+validate_sequence_data(x)
+
 x <- collapse_technical_replicates(x)
-x <- normalize_sequence_data(x, baseline = "shared_replicate")
+x <- normalize_sequence_data(
+  x,
+  baseline = "within_sequence",
+  lloq = 0.005
+)
 
 h <- estimate_history_effect(x)
 dh <- estimate_reciprocal_asymmetry(x)
@@ -79,15 +97,25 @@ head(dh)
 head(abs)
 ```
 
+## LLOQ discipline
+
+histPharm does not convert an observation that is merely known to be below quantification into an invented value such as `1e-8`.
+
+If a required component of the four-cell history contrast is censored, the exact history effect is returned as `NA` with `history_effect_status = "censored_or_missing"`.
+
+This prevents a below-LLOQ combination response from generating an artificial very large history effect.
+
 ## Interpretation discipline
 
-histPharm does **not** rename every positive interaction as biological synergy. `history_effect > 0` means that, on the chosen log-multiplicative scale and under matched timing controls, prior treatment increased the relative incremental effect of the second drug. Biological mechanism, durable killing, and clinical superiority require separate evidence.
+histPharm does **not** rename every positive interaction as biological synergy. `history_effect > 0` means that, on the chosen log-multiplicative scale and under matched timing controls, prior treatment increased the relative incremental effect of the second drug.
+
+It does not by itself establish molecular memory, a specific mechanism, irreversible killing, or clinical superiority.
 
 Raw observations determine conclusions. Smoothing, curve fitting, and interpolation are visualization or prediction aids and must not replace measured values.
 
 ## Benchmarking philosophy
 
-The package is intended to be compared with, not rhetorically substituted for, established frameworks. d-chain is an important published Bayesian sequential dose-response benchmark. histPharm adds estimands enabled by a reciprocal 2D design: direct history-effect asymmetry, separation of interaction from absolute efficacy, experimentally measured state prediction, and delayed regenerative fate.
+The package is intended to be compared with, not rhetorically substituted for, established frameworks. d-chain is an important published Bayesian sequential dose-response benchmark. histPharm adds estimands enabled by a reciprocal 2D design: direct history-effect asymmetry, separation of interaction from cross-sequence burden, experimentally measured state prediction, and delayed regenerative fate.
 
 ## Installation from the current development location
 
@@ -99,4 +127,4 @@ remotes::install_github(
 )
 ```
 
-The package is being developed on an isolated branch before it is split into its own `histPharm` repository.
+The package remains on an isolated development branch until expert-review remediation and real-data validation are complete.
