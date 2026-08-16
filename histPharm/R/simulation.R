@@ -2,11 +2,13 @@
 #'
 #' The simulator generates complete reciprocal dose surfaces whose history
 #' effects are known by construction. It is intended for estimator validation,
-#' power exploration, and benchmark scenarios rather than biological inference.
+#' power exploration, and adversarial benchmark scenarios rather than biological
+#' inference.
 #'
 #' @param dose_A Numeric dose grid for drug A, including zero.
 #' @param dose_B Numeric dose grid for drug B, including zero.
-#' @param n_models Number of biological models.
+#' @param n_models Number of biological models when model_names is NULL.
+#' @param model_names Optional explicit biological model names.
 #' @param n_replicates Number of biological replicates per model.
 #' @param n_technical Number of technical repeats per condition.
 #' @param h_A_to_B True A-to-B history effect.
@@ -18,13 +20,20 @@
 #' @param b_early_multiplier Timing multiplier for B when given first.
 #' @param b_late_multiplier Timing multiplier for B when given second.
 #' @param noise_sd Log-normal measurement-noise standard deviation.
+#' @param plate_sd Additional multiplicative plate-to-plate variation.
+#' @param phase1_start Start of phase 1.
+#' @param phase1_end End of phase 1.
+#' @param phase2_start Start of phase 2.
+#' @param phase2_end End of phase 2.
+#' @param endpoint_time Common endpoint time.
 #' @param seed Optional random seed.
-#' @return A long-form synthetic histPharm data frame.
+#' @return A long-form synthetic histPharm data frame with timing/plate metadata.
 #' @export
 simulate_sequence_data <- function(
   dose_A = c(0, 0.25, 0.5, 1, 2),
   dose_B = c(0, 0.25, 0.5, 1, 2),
   n_models = 3,
+  model_names = NULL,
   n_replicates = 3,
   n_technical = 2,
   h_A_to_B = 0.5,
@@ -36,14 +45,31 @@ simulate_sequence_data <- function(
   b_early_multiplier = 1,
   b_late_multiplier = 1,
   noise_sd = 0.04,
+  plate_sd = noise_sd / 3,
+  phase1_start = 0,
+  phase1_end = 48,
+  phase2_start = 48,
+  phase2_end = 96,
+  endpoint_time = 96,
   seed = NULL
 ) {
   if (!is.null(seed)) set.seed(seed)
   if (!0 %in% dose_A || !0 %in% dose_B) stop("Both dose grids must include zero.", call. = FALSE)
-  if (n_models < 1 || n_replicates < 1 || n_technical < 1) stop("Replication counts must be positive.", call. = FALSE)
+  if (n_replicates < 1 || n_technical < 1) stop("Replication counts must be positive.", call. = FALSE)
+  if (is.null(model_names)) {
+    if (n_models < 1) stop("n_models must be positive.", call. = FALSE)
+    model_names <- paste0("M", seq_len(n_models))
+  } else {
+    model_names <- as.character(model_names)
+    if (!length(model_names) || any(!nzchar(model_names)) || anyDuplicated(model_names)) stop("model_names must be unique, non-empty names.", call. = FALSE)
+    n_models <- length(model_names)
+  }
+  if (!(phase1_start < phase1_end && phase1_end <= phase2_start && phase2_start < phase2_end && phase2_end <= endpoint_time)) {
+    stop("Invalid simulation timing metadata.", call. = FALSE)
+  }
 
   grid <- expand.grid(
-    model = paste0("M", seq_len(n_models)),
+    model = model_names,
     replicate = seq_len(n_replicates),
     sequence = c("A_to_B", "B_to_A"),
     dose_A = dose_A,
@@ -53,11 +79,20 @@ simulate_sequence_data <- function(
     stringsAsFactors = FALSE
   )
 
-  model_A <- stats::setNames(stats::rlnorm(n_models, 0, 0.12), paste0("M", seq_len(n_models)))
-  model_B <- stats::setNames(stats::rlnorm(n_models, 0, 0.12), paste0("M", seq_len(n_models)))
+  model_A <- stats::setNames(stats::rlnorm(n_models, 0, 0.12), model_names)
+  model_B <- stats::setNames(stats::rlnorm(n_models, 0, 0.12), model_names)
   plate_keys <- unique(grid[c("model", "replicate", "sequence")])
-  plate_keys$plate_factor <- stats::rlnorm(nrow(plate_keys), 0, noise_sd / 3)
+  plate_keys$plate <- paste(plate_keys$model, paste0("BR", plate_keys$replicate), plate_keys$sequence, sep = "_")
+  plate_keys$calibration_group <- paste(plate_keys$model, paste0("BR", plate_keys$replicate), sep = "_")
+  plate_keys$plate_factor <- stats::rlnorm(nrow(plate_keys), 0, plate_sd)
   grid <- merge(grid, plate_keys, by = c("model", "replicate", "sequence"), sort = FALSE)
+
+  grid$phase1_start <- phase1_start
+  grid$phase1_end <- phase1_end
+  grid$phase2_start <- phase2_start
+  grid$phase2_end <- phase2_end
+  grid$endpoint_time <- endpoint_time
+  grid$endpoint <- paste0("T", endpoint_time)
 
   out <- numeric(nrow(grid))
   truth <- numeric(nrow(grid))
@@ -131,6 +166,7 @@ run_simulation_benchmark <- function(
         seed = seeds[cursor]
       )
       cursor <- cursor + 1L
+      validate_sequence_data(x)
       x <- collapse_technical_replicates(x)
       x <- normalize_sequence_data(x, baseline = "shared_replicate")
       d <- estimate_reciprocal_asymmetry(x)
