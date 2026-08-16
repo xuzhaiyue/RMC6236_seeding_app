@@ -1,0 +1,83 @@
+---
+title: "A reciprocal history-conditioned pharmacology workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{A reciprocal history-conditioned pharmacology workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(histPharm)
+```
+
+## Design principle
+
+A reciprocal experiment contains matched `A_to_B` and `B_to_A` dose surfaces. Each biological replicate retains the vehicle, A-only margins, B-only margins, and combination cells. These controls allow the effect of the second drug after first-drug history to be compared with the same-phase second-drug effect without that history.
+
+## Simulate known truth
+
+```{r}
+x <- simulate_sequence_data(
+  h_A_to_B = 0.5,
+  h_B_to_A = 0.1,
+  n_models = 3,
+  n_replicates = 3,
+  seed = 11
+)
+x <- collapse_technical_replicates(x)
+x <- normalize_sequence_data(x, baseline = "shared_replicate")
+```
+
+## Estimate interaction and absolute burden separately
+
+```{r}
+h <- estimate_history_effect(x)
+dh <- estimate_reciprocal_asymmetry(x)
+abs <- estimate_absolute_sequence_effect(x)
+
+head(dh)
+head(abs)
+```
+
+`delta_history` is not a synonym for absolute efficacy. The former asks whether the first-treatment history changes the second-drug incremental effect differently by order. The latter asks which matched schedule leaves less observed burden.
+
+## Quantify uncertainty
+
+```{r}
+bootstrap_sequence_metrics(dh, "delta_history", B = 200, seed = 1)
+```
+
+For publication-scale analyses, use the prespecified biological replicates and increase the bootstrap draws.
+
+## Transform to effect space
+
+```{r}
+e <- transform_effect_space(x)
+head(e)
+```
+
+This separates nominal concentration from the biological perturbation depth actually produced by each single-drug margin.
+
+## Benchmark an established sequential-response implementation
+
+```{r eval=FALSE}
+dchain_input <- as_dchain_viability_data(
+  x,
+  sequence = "A_to_B",
+  first_dose = 1,
+  drug_A = "DrugA",
+  drug_B = "DrugB"
+)
+utils::write.table(
+  dchain_input,
+  "dchain_input.csv",
+  sep = ",",
+  row.names = FALSE,
+  col.names = TRUE,
+  quote = FALSE
+)
+```
+
+The adapter reproduces the public example column schema. The public d-chain C++ parser expects an unquoted comma-separated file, so the example explicitly disables quoting. The adapter does not make histPharm and d-chain mathematically equivalent; the frameworks estimate different quantities and should be compared accordingly.

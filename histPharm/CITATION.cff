@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+title: histPharm: History-Conditioned Pharmacology for Sequential Drug Experiments
+message: If you use histPharm, please cite the software and the associated methodological work when available.
+type: software
+authors:
+  - given-names: Zhaiyue
+version: 0.1.0
+date-released: 2026-08-16
+license: MIT
+repository-code: https://github.com/xuzhaiyue/RMC6236_seeding_app
