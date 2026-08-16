@@ -92,7 +92,11 @@ The package is intended to be compared with, not rhetorically substituted for, e
 ## Installation from the current development location
 
 ```r
-remotes::install_github("xuzhaiyue/RMC6236_seeding_app", subdir = "histPharm")
+remotes::install_github(
+  "xuzhaiyue/RMC6236_seeding_app",
+  ref = "agent/histpharm-method-framework",
+  subdir = "histPharm"
+)
 ```
 
 The package is being developed on an isolated branch before it is split into its own `histPharm` repository.
