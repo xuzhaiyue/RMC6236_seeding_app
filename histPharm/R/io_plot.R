@@ -24,9 +24,10 @@ as_dchain_viability_data <- function(
 ) {
   sequence <- match.arg(sequence)
   .assert_columns(data, c("model", "replicate", "sequence", "dose_A", "dose_B", value))
+  .assert_collapsed_unique(data, extra_cols = intersect(c("endpoint", "time"), names(data)))
   z <- data[data$sequence == sequence, , drop = FALSE]
   if (!nrow(z)) stop("Requested sequence is absent.", call. = FALSE)
-  plate <- if (!is.null(plate_col) && plate_col %in% names(z)) z[[plate_col]] else z$replicate
+  plate <- if (!is.null(plate_col) && plate_col %in% names(z)) z[[plate_col]] else if ("plate" %in% names(z)) z$plate else z$replicate
 
   mk <- function(idx, experiment, pretreatment, compound, concentration) {
     if (!any(idx)) return(data.frame())
@@ -69,7 +70,8 @@ as_dchain_viability_data <- function(
 
 #' Plot a history-effect dose surface
 #'
-#' Uses measured grid values only. No smoothing or interpolation is performed.
+#' Uses measured grid values only. Missing coordinates remain NA and are never
+#' silently rendered as zero. No smoothing or interpolation is performed.
 #'
 #' @param metrics Output of estimate_history_effect or a compatible table.
 #' @param metric Numeric column to display.
@@ -78,19 +80,29 @@ as_dchain_viability_data <- function(
 #' @export
 plot_history_surface <- function(metrics, metric = "history_effect", main = NULL) {
   .assert_columns(metrics, c("dose_A", "dose_B", metric))
-  agg <- stats::aggregate(metrics[[metric]], metrics[c("dose_A", "dose_B")], mean, na.rm = TRUE)
+  agg <- stats::aggregate(metrics[[metric]], metrics[c("dose_A", "dose_B")], function(x) {
+    x <- x[is.finite(x)]
+    if (!length(x)) NA_real_ else mean(x)
+  })
   names(agg)[3] <- "value"
-  mat <- stats::xtabs(value ~ dose_A + dose_B, data = agg)
-  x <- as.numeric(rownames(mat)); y <- as.numeric(colnames(mat))
-  graphics::image(x, y, unclass(mat), xlab = "Dose A", ylab = "Dose B", main = main)
-  graphics::contour(x, y, unclass(mat), add = TRUE, drawlabels = FALSE)
+  x <- sort(unique(agg$dose_A))
+  y <- sort(unique(agg$dose_B))
+  mat <- matrix(NA_real_, nrow = length(x), ncol = length(y), dimnames = list(as.character(x), as.character(y)))
+  for (i in seq_len(nrow(agg))) {
+    ix <- match(agg$dose_A[i], x)
+    iy <- match(agg$dose_B[i], y)
+    mat[ix, iy] <- agg$value[i]
+  }
+  graphics::image(x, y, mat, xlab = "Dose A", ylab = "Dose B", main = main)
+  if (sum(is.finite(mat)) >= 4L) graphics::contour(x, y, mat, add = TRUE, drawlabels = FALSE)
+  attr(agg, "surface_matrix") <- mat
   invisible(agg)
 }
 
 #' Plot interaction asymmetry against absolute efficacy
 #'
 #' The two axes deliberately remain separate. Quadrants reveal concordant and
-#' discordant sequence regimes.
+#' discordant sequence regimes. Censored/missing points are omitted.
 #'
 #' @param reciprocal Output of estimate_reciprocal_asymmetry.
 #' @param absolute Output of estimate_absolute_sequence_effect.
@@ -99,10 +111,13 @@ plot_history_surface <- function(metrics, metric = "history_effect", main = NULL
 #' @export
 plot_sequence_effect_map <- function(reciprocal, absolute, main = "Sequence effect map") {
   z <- classify_sequence_regime(reciprocal, absolute)
-  graphics::plot(z$delta_history, z$absolute_log_ratio,
+  ok <- is.finite(z$delta_history) & is.finite(z$absolute_log_ratio)
+  graphics::plot(
+    z$delta_history[ok], z$absolute_log_ratio[ok],
     xlab = "Reciprocal history asymmetry (DeltaH)",
     ylab = "Absolute sequence contrast",
-    main = main, pch = 19)
+    main = main, pch = 19
+  )
   graphics::abline(h = 0, v = 0, lty = 2)
   invisible(z)
 }
