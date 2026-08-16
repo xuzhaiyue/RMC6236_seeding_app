@@ -97,6 +97,58 @@ head(dh)
 head(abs)
 ```
 
+## One-command reciprocal discovery report
+
+`run_reciprocal_report()` turns a complete raw reciprocal matrix into a fixed, auditable report package. It first validates the experimental design, then collapses technical replicates, performs explicit LLOQ masking, calculates the core estimands, writes machine-readable tables, and exports PDF figures.
+
+```r
+report <- run_reciprocal_report(
+  data = raw_data,
+  outdir = "histPharm_report",
+  lloq = YOUR_ASSAY_LLOQ
+)
+```
+
+The output tree is fixed:
+
+```text
+histPharm_report/
+  01_QC/
+    collapsed_biological_conditions.csv
+    normalized_response_with_LLOQ_flags.csv
+  02_Response/
+    <model>_single_agent_curves.pdf
+    <model>_A_to_B_response_surface.pdf
+    <model>_B_to_A_response_surface.pdf
+  03_History/
+    history_effects.csv
+    <model>_A_to_B_H_surface.pdf
+    <model>_B_to_A_H_surface.pdf
+  04_Sequence/
+    reciprocal_deltaH.csv
+    absolute_sequence_contrast.csv   # only when calibration is valid
+    <model>_DeltaH_surface.pdf
+    <model>_absolute_sequence_surface.pdf
+    <model>_interaction_vs_absolute.pdf
+  05_EffectSpace/
+    effect_space_projection.csv
+    <model>_effect_space_DeltaH.pdf
+    CROSS_MODEL_effect_space_overlay_DeltaH.pdf
+  report_manifest.csv
+```
+
+### Effect-space output is a primary visualization guardrail
+
+The cross-model effect-space overlay maps physical doses to observed single-agent residual fractions. It asks whether models that require different nominal concentrations nevertheless occupy similar biological-response coordinates when history asymmetry is strong.
+
+The plot does **not** predefine a 50--70% "golden center" and does **not** infer an overlap island by smoothing. The 0.5 and 0.7 reference lines are visual landmarks only. All displayed locations are observed marginal-response coordinates, and point size encodes the magnitude of `DeltaH`.
+
+This supports the intended claim only if the raw data actually show convergence:
+
+> sequence-specific vulnerability may be organized by biological perturbation depth rather than absolute nominal dose.
+
+If HPAC and SU.86.86 do not converge in effect space, the plot remains a valid negative or model-specific result.
+
 ## LLOQ discipline
 
 histPharm does not convert an observation that is merely known to be below quantification into an invented value such as `1e-8`.
